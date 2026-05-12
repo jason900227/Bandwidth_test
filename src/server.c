@@ -2,10 +2,20 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <time.h>
+#include <sys/socket.h>
+#include <sys/time.h>
 
 #define PORT 5001
 #define BUF_SIZE 8192
+
+static double now_sec()
+{
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+
+    return tv.tv_sec + tv.tv_usec / 1e6;
+}
 
 int main()
 {
@@ -35,28 +45,59 @@ int main()
     printf("Client connected\n");
 
     long long total_bytes = 0;
+    long long interval_bytes = 0;
 
     ssize_t n;
 
-    time_t start = time(NULL);
+    double start = now_sec();
+    double last = start;
 
     while ((n = read(client_fd, buffer, BUF_SIZE)) > 0)
     {
         total_bytes += n;
+        interval_bytes += n;
+
+        double now = now_sec();
+
+        if (now - last >= 1.0)
+        {
+            double bandwidth =
+                (interval_bytes / 1024.0 / 1024.0) /
+                (now - last);
+
+            printf("[ %.2f - %.2f sec ] %.2f MB/s\n",
+                   last - start,
+                   now - start,
+                   bandwidth);
+
+            interval_bytes = 0;
+            last = now;
+        }
     }
 
-    time_t end = time(NULL);
+    double end = now_sec();
 
-    double duration = end - start;
+    // Handle last interval
+    if (interval_bytes > 0)
+    {
+        double bandwidth =
+            (interval_bytes / 1024.0 / 1024.0) /
+            (end - last);
 
-    if (duration <= 0)
-        duration = 1;
+        printf("[ %.2f - %.2f sec ] %.2f MB/s (last)\n",
+               last - start,
+               end - start,
+               bandwidth);
+    }
 
-    printf("\n===== RESULT =====\n");
-    printf("Received: %lld bytes\n", total_bytes);
-    printf("Time: %.2f sec\n", duration);
-    printf("Bandwidth: %.2f MB/s\n",
-           (total_bytes / 1024.0 / 1024.0) / duration);
+    double avg =
+        (total_bytes / 1024.0 / 1024.0) /
+        (end - start);
+
+    printf("\n===== FINAL =====\n");
+    printf("Total: %lld bytes\n", total_bytes);
+    printf("Time : %.2f sec\n", end - start);
+    printf("Avg  : %.2f MB/s\n", avg);
 
     close(client_fd);
     close(server_fd);
