@@ -4,6 +4,8 @@
 #include <arpa/inet.h>
 
 #define PORT 5001
+#define BUF_SIZE 8192
+#define TOTAL_SEND (100 * 1024 * 1024)
 
 int main()
 {
@@ -11,27 +13,34 @@ int main()
 
     struct sockaddr_in server;
 
-    char message[] = "Hello Server";
+    char buffer[BUF_SIZE];
 
-    // Create TCP socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
 
-    // Clear server structure
     memset(&server, 0, sizeof(server));
 
     server.sin_family = AF_INET;
     server.sin_port = htons(PORT);
 
-    // Convert IP address
     inet_pton(AF_INET, "192.168.23.230", &server.sin_addr);
 
-    // Connect to server
     connect(sock, (struct sockaddr*)&server, sizeof(server));
 
-    // Send message
-    write(sock, message, strlen(message));
+    memset(buffer, 'A', BUF_SIZE);
 
-    printf("Message sent\n");
+    long long sent = 0;
+
+    while (sent < TOTAL_SEND)
+    {
+        int n = write(sock, buffer, BUF_SIZE);
+
+        if (n <= 0)
+            break;
+
+        sent += n;
+    }
+
+    printf("Sent %lld bytes\n", sent);
 
     close(sock);
 
