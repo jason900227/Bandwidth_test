@@ -4,9 +4,10 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <stdlib.h>
 
-#define PORT 5001
-#define BUF_SIZE 8192
+#define DEFAULT_PORT 5001
+#define BUF_SIZE 65536
 
 static double now_sec()
 {
@@ -17,43 +18,135 @@ static double now_sec()
     return tv.tv_sec + tv.tv_usec / 1e6;
 }
 
-int main()
+void usage(const char *prog)
+{
+    printf("\nUsage:\n");
+
+    printf("  %s [-p <port>]\n",
+           prog);
+
+    printf("\nOptions:\n");
+
+    printf("  -p <port>        TCP port (default: %d)\n",
+           DEFAULT_PORT);
+
+    printf("  -h, --help       Show this help message\n");
+
+    printf("\n");
+}
+
+int main(int argc, char *argv[])
 {
     int server_fd;
     int client_fd;
+
+    int port = DEFAULT_PORT;
+
+    // Parse arguments
+    for (int i = 1; i < argc; i++)
+    {
+        if (strcmp(argv[i], "-p") == 0 &&
+            i + 1 < argc)
+        {
+            port = atoi(argv[++i]);
+        }
+        else if (strcmp(argv[i], "-h") == 0 ||
+                 strcmp(argv[i], "--help") == 0)
+        {
+            usage(argv[0]);
+            return 0;
+        }
+        else
+        {
+            printf("Unknown option: %s\n",
+                   argv[i]);
+
+            usage(argv[0]);
+
+            return -1;
+        }
+    }
 
     struct sockaddr_in addr;
 
     char buffer[BUF_SIZE];
 
+    // Create socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_fd < 0)
+    {
+        perror("socket");
+        return -1;
+    }
+
+    int opt = 1;
+
+    setsockopt(server_fd,
+               SOL_SOCKET,
+               SO_REUSEADDR,
+               &opt,
+               sizeof(opt));
 
     memset(&addr, 0, sizeof(addr));
 
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(PORT);
+    addr.sin_port = htons(port);
 
-    bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
+    // Bind socket
+    if (bind(server_fd,
+             (struct sockaddr*)&addr,
+             sizeof(addr)) < 0)
+    {
+        perror("bind");
 
+        close(server_fd);
+
+        return -1;
+    }
+
+    // Start listening
     listen(server_fd, 1);
 
-    printf("Server listening...\n");
+    printf("Server listening on %d...\n",
+           port);
 
+    // Accept client
     client_fd = accept(server_fd, NULL, NULL);
 
-    printf("Client connected\n");
+    if (client_fd < 0)
+    {
+        perror("accept");
+
+        close(server_fd);
+
+        return -1;
+    }
+
+    printf("Client connected\n\n");
+
+    printf("%-18s %-18s\n",
+           "Interval(sec)",
+           "Bandwidth(MB/s)");
+
+    printf("------------------------------------------------\n");
 
     long long total_bytes = 0;
     long long interval_bytes = 0;
 
-    ssize_t n;
-
     double start = now_sec();
     double last = start;
 
-    while ((n = read(client_fd, buffer, BUF_SIZE)) > 0)
+    while (1)
     {
+        ssize_t n = read(client_fd,
+                         buffer,
+                         BUF_SIZE);
+
+        if (n <= 0)
+            break;
+
         total_bytes += n;
         interval_bytes += n;
 
@@ -65,7 +158,7 @@ int main()
                 (interval_bytes / 1024.0 / 1024.0) /
                 (now - last);
 
-            printf("[ %.2f - %.2f sec ] %.2f MB/s\n",
+            printf("[%6.2f - %6.2f]   %10.2f\n",
                    last - start,
                    now - start,
                    bandwidth);
@@ -77,27 +170,31 @@ int main()
 
     double end = now_sec();
 
-    // Handle last interval
+    // Last interval
     if (interval_bytes > 0)
     {
         double bandwidth =
             (interval_bytes / 1024.0 / 1024.0) /
             (end - last);
 
-        printf("[ %.2f - %.2f sec ] %.2f MB/s (last)\n",
+        printf("[%6.2f - %6.2f]   %10.2f (last)\n",
                last - start,
                end - start,
                bandwidth);
     }
 
-    double avg =
-        (total_bytes / 1024.0 / 1024.0) /
-        (end - start);
-
     printf("\n===== FINAL =====\n");
-    printf("Total: %lld bytes\n", total_bytes);
-    printf("Time : %.2f sec\n", end - start);
-    printf("Avg  : %.2f MB/s\n", avg);
+
+    printf("Port        : %d\n", port);
+
+    printf("Total bytes : %lld\n", total_bytes);
+
+    printf("Time        : %.3f sec\n",
+           end - start);
+
+    printf("Avg MB/s    : %.2f\n",
+           (total_bytes / 1024.0 / 1024.0) /
+           (end - start));
 
     close(client_fd);
     close(server_fd);

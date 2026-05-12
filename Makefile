@@ -2,26 +2,36 @@
 ARM_CC = arm-linux-gnueabihf-gcc
 CC = gcc
 
+# flags
 CFLAGS = -Wall -Wextra -g
 
-# source files
-SERVER_SRC = src/server.c
-CLIENT_SRC = src/client.c
-
-# output
+# directories
+SRC_DIR = src
 BUILD_DIR = build
 
-all: server client util
+# source files
+SERVER_SRC = $(SRC_DIR)/server.c
+CLIENT_SRC = $(SRC_DIR)/client.c
 
-server:
-	mkdir -p $(BUILD_DIR)
-	$(ARM_CC) $(CFLAGS) $(SERVER_SRC) -o $(BUILD_DIR)/server
+# targets
+SERVER_BIN = $(BUILD_DIR)/server
+CLIENT_BIN = $(BUILD_DIR)/client
 
-client:
+all: server client
+
+server: $(SERVER_BIN)
+
+client: $(CLIENT_BIN)
+
+$(SERVER_BIN): $(SERVER_SRC)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(CLIENT_SRC) -o $(BUILD_DIR)/client
+	$(ARM_CC) $(CFLAGS) $< -o $@
+
+$(CLIENT_BIN): $(CLIENT_SRC)
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) $< -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all server client util clean
+.PHONY: all server client clean
