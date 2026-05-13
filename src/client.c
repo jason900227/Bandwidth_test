@@ -5,8 +5,6 @@
 #include <arpa/inet.h>
 #include "bw_common.h"
 
-#define DEFAULT_PORT 5001
-
 void usage(const char *prog)
 {
     printf("\nUsage:\n");

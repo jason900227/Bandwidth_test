@@ -1,15 +1,16 @@
 # toolchain
 ARM_CC = arm-linux-gnueabihf-gcc
-CC = gcc
+CC     = gcc
 
 # flags
 CFLAGS = -Wall -Wextra -g
 
 # directories
-SRC_DIR = src
+SRC_DIR   = src
 BUILD_DIR = build
 
 # source files
+COMMON_SRC = $(SRC_DIR)/bw_common.c
 SERVER_SRC = $(SRC_DIR)/server.c
 CLIENT_SRC = $(SRC_DIR)/client.c
 
@@ -23,13 +24,13 @@ server: $(SERVER_BIN)
 
 client: $(CLIENT_BIN)
 
-$(SERVER_BIN): $(SERVER_SRC)
+$(SERVER_BIN): $(SERVER_SRC) $(COMMON_SRC)
 	mkdir -p $(BUILD_DIR)
-	$(ARM_CC) $(CFLAGS) $< -o $@
+	$(ARM_CC) $(CFLAGS) $^ -o $@
 
-$(CLIENT_BIN): $(CLIENT_SRC)
+$(CLIENT_BIN): $(CLIENT_SRC) $(COMMON_SRC)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) $(CFLAGS) $^ -o $@
 
 clean:
 	rm -rf $(BUILD_DIR)
