@@ -7,10 +7,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 
-#define DEFAULT_PORT 5001
-#define BUF_SIZE 65536
-
-#define MAGIC 0x12345678
+#define DEFAULT_PORT  5001
+#define BUF_SIZE      65536
+#define HANDSHAKE_KEY 0x12345678
 
 #define MODE_UP   1
 #define MODE_DOWN 2
@@ -18,7 +17,7 @@
 
 typedef struct
 {
-    uint32_t magic;
+    uint32_t key;
     uint32_t mode;
     uint32_t duration;
 } control_t;
@@ -26,37 +25,25 @@ typedef struct
 static double now_sec()
 {
     struct timeval tv;
-
     gettimeofday(&tv, NULL);
-
     return tv.tv_sec + tv.tv_usec / 1e6;
+}
+
+static void print_interval(double last, double now,
+                            double start, long long bytes)
+{
+    double bandwidth = (bytes / 1024.0 / 1024.0) / (now - last);
+    printf("[%6.2f - %6.2f]   %10.2f\n",
+           last - start, now - start, bandwidth);
 }
 
 void usage(const char *prog)
 {
     printf("\nUsage:\n");
-
-    printf("  %s -p <port>\n",
-           prog);
-
+    printf("  %s [-p port]\n", prog);
     printf("\nOptions:\n");
-
-    printf("  -p <port>        TCP port (default: %d)\n",
-           DEFAULT_PORT);
-
-    printf("  -h, --help       Show this help message\n");
-
-    printf("\n");
-}
-
-static void print_interval(double last, double now, double start, long long bytes)
-{
-    double bandwidth = (bytes / 1024.0 / 1024.0) / (now - last);
-
-    printf("[%6.2f - %6.2f]   %10.2f\n",
-           last - start,
-           now - start,
-           bandwidth);
+    printf("  -p <port>    TCP port (default: %d)\n", DEFAULT_PORT);
+    printf("  -h, --help   Show this help message\n\n");
 }
 
 static long long do_recv(int fd, char *buf, unsigned dur)
@@ -64,17 +51,12 @@ static long long do_recv(int fd, char *buf, unsigned dur)
     long long total_bytes    = 0;
     long long interval_bytes = 0;
     unsigned  printed        = 0;
+    double    start          = now_sec();
+    double    last           = start;
+    ssize_t   n;
 
-    double start = now_sec();
-    double last  = start;
-
-    while (1)
+    while ((n = read(fd, buf, BUF_SIZE)) > 0)
     {
-        ssize_t n = read(fd, buf, BUF_SIZE);
-
-        if (n <= 0)
-            break;
-
         total_bytes    += n;
         interval_bytes += n;
 
@@ -83,7 +65,6 @@ static long long do_recv(int fd, char *buf, unsigned dur)
         if (now - last >= 1.0 && printed < dur)
         {
             print_interval(last, now, start, interval_bytes);
-
             printed++;
             interval_bytes = 0;
             last = now;
@@ -101,19 +82,18 @@ static long long do_send(int fd, char *buf, unsigned dur)
     long long total_bytes    = 0;
     long long interval_bytes = 0;
     unsigned  printed        = 0;
-
-    double start = now_sec();
-    double last  = start;
+    double    start          = now_sec();
+    double    last           = start;
+    ssize_t   n;
 
     while (now_sec() - start < dur)
     {
-        ssize_t n = write(fd, buf, BUF_SIZE);
+        n = write(fd, buf, BUF_SIZE);
 
         if (n <= 0)
         {
             if (printed < dur)
                 print_interval(last, now_sec(), start, interval_bytes);
-
             return total_bytes;
         }
 
@@ -125,7 +105,6 @@ static long long do_send(int fd, char *buf, unsigned dur)
         if (now - last >= 1.0 && printed < dur)
         {
             print_interval(last, now, start, interval_bytes);
-
             printed++;
             interval_bytes = 0;
             last = now;
@@ -142,13 +121,11 @@ int main(int argc, char *argv[])
 {
     int server_fd;
     int client_fd;
-
     int port = DEFAULT_PORT;
 
     for (int i = 1; i < argc; i++)
     {
-        if (strcmp(argv[i], "-p") == 0 &&
-            i + 1 < argc)
+        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc)
         {
             port = atoi(argv[++i]);
         }
@@ -160,65 +137,41 @@ int main(int argc, char *argv[])
         }
         else
         {
-            printf("Unknown option: %s\n",
-                   argv[i]);
-
+            printf("Unknown option: %s\n", argv[i]);
             usage(argv[0]);
-
             return -1;
         }
     }
 
     struct sockaddr_in addr;
-
     char buffer[BUF_SIZE];
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (server_fd < 0)
-    {
-        perror("socket");
-        return -1;
-    }
+    if (server_fd < 0) { perror("socket"); return -1; }
 
     int opt = 1;
-
-    setsockopt(server_fd,
-               SOL_SOCKET,
-               SO_REUSEADDR,
-               &opt,
-               sizeof(opt));
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     memset(&addr, 0, sizeof(addr));
-
-    addr.sin_family = AF_INET;
+    addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(port);
+    addr.sin_port        = htons(port);
 
-    if (bind(server_fd,
-             (struct sockaddr*)&addr,
-             sizeof(addr)) < 0)
+    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
         perror("bind");
-
         close(server_fd);
-
         return -1;
     }
 
     listen(server_fd, 1);
-
-    printf("Server listening on %d...\n",
-           port);
+    printf("Server listening on %d...\n", port);
 
     client_fd = accept(server_fd, NULL, NULL);
-
     if (client_fd < 0)
     {
         perror("accept");
-
         close(server_fd);
-
         return -1;
     }
 
@@ -228,36 +181,21 @@ int main(int argc, char *argv[])
      * Receive handshake
      */
     control_t ctrl;
-
     memset(&ctrl, 0, sizeof(ctrl));
-
     read(client_fd, &ctrl, sizeof(ctrl));
 
-    if (ctrl.magic != MAGIC)
+    if (ctrl.key != HANDSHAKE_KEY)
     {
         printf("Bad protocol\n");
-
         close(client_fd);
         close(server_fd);
-
         return -1;
     }
 
-    printf("Mode        : ");
-
-    if (ctrl.mode == MODE_UP)
-        printf("UPSTREAM\n");
-    else if (ctrl.mode == MODE_DOWN)
-        printf("DOWNSTREAM\n");
-    else if (ctrl.mode == MODE_BOTH)
-        printf("BOTH\n");
-
+    const char *mode_names[] = { "", "UPSTREAM", "DOWNSTREAM", "BOTH" };
+    printf("Mode        : %s\n",       mode_names[ctrl.mode]);
     printf("Duration    : %u sec\n\n", ctrl.duration);
-
-    printf("%-18s %-18s\n",
-           "Interval(sec)",
-           "Bandwidth(MB/s)");
-
+    printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
     printf("------------------------------------------------\n");
 
     memset(buffer, 'A', BUF_SIZE);
@@ -284,16 +222,13 @@ int main(int argc, char *argv[])
     else if (ctrl.mode == MODE_BOTH)
     {
         printf("UPSTREAM phase\n");
-
         do_recv(client_fd, buffer, ctrl.duration);
 
         printf("\nDOWNSTREAM phase\n");
-
         do_send(client_fd, buffer, ctrl.duration);
     }
 
     close(client_fd);
     close(server_fd);
-
     return 0;
 }

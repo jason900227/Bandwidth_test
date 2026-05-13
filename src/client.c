@@ -6,10 +6,9 @@
 #include <stdint.h>
 #include <sys/time.h>
 
-#define DEFAULT_PORT 5001
-#define BUF_SIZE 65536
-
-#define MAGIC 0x12345678
+#define DEFAULT_PORT  5001
+#define BUF_SIZE      65536
+#define HANDSHAKE_KEY 0x12345678
 
 #define MODE_UP   1
 #define MODE_DOWN 2
@@ -17,7 +16,7 @@
 
 typedef struct
 {
-    uint32_t magic;
+    uint32_t key;
     uint32_t mode;
     uint32_t duration;
 } control_t;
@@ -25,50 +24,38 @@ typedef struct
 static double now_sec()
 {
     struct timeval tv;
-
     gettimeofday(&tv, NULL);
-
     return tv.tv_sec + tv.tv_usec / 1e6;
+}
+
+static void print_result(const char *label, const char *dir,
+                         long long bytes, int dur)
+{
+    printf("\n===== %s RESULT =====\n", label);
+    printf("Bytes %-5s : %lld\n",    dir, bytes);
+    printf("MB    %-5s : %.2f MB\n", dir, bytes / 1024.0 / 1024.0);
+    printf("Avg MB/s    : %.2f\n",  (bytes / 1024.0 / 1024.0) / dur);
 }
 
 void usage(const char *prog)
 {
     printf("\nUsage:\n");
-
-    printf("  %s -c <server_ip> -p <port> -t <seconds> -m <mode>\n",
-           prog);
-
+    printf("  %s -c <server_ip> [-p port] [-t sec] [-m up|down|both]\n", prog);
     printf("\nOptions:\n");
-
     printf("  -c <server_ip>   Server IP address\n");
-
-    printf("  -p <port>        TCP port (default: %d)\n",
-           DEFAULT_PORT);
-
+    printf("  -p <port>        TCP port (default: %d)\n", DEFAULT_PORT);
     printf("  -t <seconds>     Test duration in seconds (default: 5)\n");
-
     printf("  -m <mode>        up | down | both (default: up)\n");
-
-    printf("  -h, --help       Show this help message\n");
-
-    printf("\n");
+    printf("  -h, --help       Show this help message\n\n");
 }
 
 int main(int argc, char *argv[])
 {
-    int sock;
-
-    struct sockaddr_in server;
-
-    char buffer[BUF_SIZE];
-
-    char *ip = NULL;
-
-    int port = DEFAULT_PORT;
-
-    int duration = 5;
-
-    int mode = MODE_UP;
+    int  sock;
+    char *ip      = NULL;
+    int  port     = DEFAULT_PORT;
+    int  duration = 5;
+    int  mode     = MODE_UP;
 
     for (int i = 1; i < argc; i++)
     {
@@ -87,24 +74,10 @@ int main(int argc, char *argv[])
         else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc)
         {
             i++;
-
-            if (strcmp(argv[i], "up") == 0)
-            {
-                mode = MODE_UP;
-            }
-            else if (strcmp(argv[i], "down") == 0)
-            {
-                mode = MODE_DOWN;
-            }
-            else if (strcmp(argv[i], "both") == 0)
-            {
-                mode = MODE_BOTH;
-            }
-            else
-            {
-                printf("Invalid mode: %s\n", argv[i]);
-                return -1;
-            }
+            if      (strcmp(argv[i], "up")   == 0) mode = MODE_UP;
+            else if (strcmp(argv[i], "down") == 0) mode = MODE_DOWN;
+            else if (strcmp(argv[i], "both") == 0) mode = MODE_BOTH;
+            else { printf("Invalid mode: %s\n", argv[i]); return -1; }
         }
         else if (strcmp(argv[i], "-h") == 0 ||
                  strcmp(argv[i], "--help") == 0)
@@ -115,31 +88,20 @@ int main(int argc, char *argv[])
         else
         {
             printf("Unknown option: %s\n", argv[i]);
-
             usage(argv[0]);
-
             return -1;
         }
     }
 
-    if (!ip || duration <= 0)
-    {
-        usage(argv[0]);
-        return -1;
-    }
+    if (!ip || duration <= 0) { usage(argv[0]); return -1; }
 
     sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) { perror("socket"); return -1; }
 
-    if (sock < 0)
-    {
-        perror("socket");
-        return -1;
-    }
-
+    struct sockaddr_in server;
     memset(&server, 0, sizeof(server));
-
     server.sin_family = AF_INET;
-    server.sin_port = htons(port);
+    server.sin_port   = htons(port);
 
     if (inet_pton(AF_INET, ip, &server.sin_addr) <= 0)
     {
@@ -163,19 +125,18 @@ int main(int argc, char *argv[])
      * Send handshake
      */
     control_t ctrl;
-
-    ctrl.magic    = MAGIC;
+    ctrl.key    = HANDSHAKE_KEY;
     ctrl.mode     = mode;
     ctrl.duration = duration;
-
     write(sock, &ctrl, sizeof(ctrl));
 
-    memset(buffer, 'A', BUF_SIZE);
-
+    char      buffer[BUF_SIZE];
     long long up_bytes   = 0;
     long long down_bytes = 0;
     double    start;
     ssize_t   n;
+
+    memset(buffer, 'A', BUF_SIZE);
 
     /*
      * UPSTREAM
@@ -185,17 +146,10 @@ int main(int argc, char *argv[])
         printf(mode == MODE_UP ? "Mode: UPSTREAM\n" : "Mode: BOTH\nUPSTREAM phase\n");
 
         start = now_sec();
-
         while (now_sec() - start < duration)
         {
             n = write(sock, buffer, BUF_SIZE);
-
-            if (n <= 0)
-            {
-                perror("write");
-                break;
-            }
-
+            if (n <= 0) { perror("write"); break; }
             up_bytes += n;
         }
 
@@ -211,17 +165,10 @@ int main(int argc, char *argv[])
         printf(mode == MODE_DOWN ? "Mode: DOWNSTREAM\n" : "DOWNSTREAM phase\n");
 
         start = now_sec();
-
         while (now_sec() - start < duration)
         {
             n = read(sock, buffer, BUF_SIZE);
-
-            if (n <= 0)
-            {
-                perror("read");
-                break;
-            }
-
+            if (n <= 0) { perror("read"); break; }
             down_bytes += n;
         }
 
@@ -232,43 +179,29 @@ int main(int argc, char *argv[])
      * RESULT
      */
     printf("\nServer IP   : %s\n", ip);
-    printf("Port        : %d\n", port);
+    printf("Port        : %d\n",   port);
     printf("Duration    : %d sec\n", duration);
 
     if (mode == MODE_UP)
     {
-        printf("\n===== UPSTREAM RESULT =====\n");
-        printf("Bytes Sent  : %lld\n", up_bytes);
-        printf("MB Sent     : %.2f MB\n", up_bytes / 1024.0 / 1024.0);
-        printf("Avg MB/s    : %.2f\n", (up_bytes / 1024.0 / 1024.0) / duration);
+        print_result("UPSTREAM", "Sent", up_bytes, duration);
     }
     else if (mode == MODE_DOWN)
     {
-        printf("\n===== DOWNSTREAM RESULT =====\n");
-        printf("Bytes Recv  : %lld\n", down_bytes);
-        printf("MB Recv     : %.2f MB\n", down_bytes / 1024.0 / 1024.0);
-        printf("Avg MB/s    : %.2f\n", (down_bytes / 1024.0 / 1024.0) / duration);
+        print_result("DOWNSTREAM", "Recv", down_bytes, duration);
     }
     else if (mode == MODE_BOTH)
     {
-        printf("\n===== UPSTREAM RESULT =====\n");
-        printf("Bytes Sent  : %lld\n", up_bytes);
-        printf("MB Sent     : %.2f MB\n", up_bytes / 1024.0 / 1024.0);
-        printf("Avg MB/s    : %.2f\n", (up_bytes / 1024.0 / 1024.0) / duration);
+        print_result("UPSTREAM",   "Sent", up_bytes,   duration);
+        print_result("DOWNSTREAM", "Recv", down_bytes, duration);
 
-        printf("\n===== DOWNSTREAM RESULT =====\n");
-        printf("Bytes Recv  : %lld\n", down_bytes);
-        printf("MB Recv     : %.2f MB\n", down_bytes / 1024.0 / 1024.0);
-        printf("Avg MB/s    : %.2f\n", (down_bytes / 1024.0 / 1024.0) / duration);
-
-        printf("\n===== TOTAL =====\n");
         long long total = up_bytes + down_bytes;
-        printf("Bytes Total : %lld\n", total);
+        printf("\n===== TOTAL =====\n");
+        printf("Bytes Total : %lld\n",    total);
         printf("MB Total    : %.2f MB\n", total / 1024.0 / 1024.0);
-        printf("Avg MB/s    : %.2f\n", (total / 1024.0 / 1024.0) / (duration * 2));
+        printf("Avg MB/s    : %.2f\n",   (total / 1024.0 / 1024.0) / (duration * 2));
     }
 
     close(sock);
-
     return 0;
 }
