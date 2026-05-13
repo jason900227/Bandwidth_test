@@ -22,6 +22,12 @@ typedef struct
     uint32_t duration;
 } control_t;
 
+typedef struct
+{
+    long long bytes;
+    double    elapsed;
+} result_t;
+
 static double now_sec()
 {
     struct timeval tv;
@@ -37,6 +43,16 @@ static void print_interval(double last, double now,
            last - start, now - start, bandwidth);
 }
 
+static void print_result(const char *label, const char *dir,
+                         long long bytes, double elapsed)
+{
+    printf("\n===== %s RESULT =====\n", label);
+    printf("Bytes %-5s : %lld\n",    dir, bytes);
+    printf("MB    %-5s : %.2f MB\n", dir, bytes / 1024.0 / 1024.0);
+    printf("Elapsed     : %.2f sec\n", elapsed);
+    printf("Avg MB/s    : %.2f\n",  (bytes / 1024.0 / 1024.0) / elapsed);
+}
+
 void usage(const char *prog)
 {
     printf("\nUsage:\n");
@@ -46,7 +62,7 @@ void usage(const char *prog)
     printf("  -h, --help   Show this help message\n\n");
 }
 
-static long long do_recv(int fd, char *buf, unsigned dur)
+static result_t do_recv(int fd, char *buf, unsigned dur)
 {
     long long total_bytes    = 0;
     long long interval_bytes = 0;
@@ -71,13 +87,15 @@ static long long do_recv(int fd, char *buf, unsigned dur)
         }
     }
 
+    double elapsed = now_sec() - start;
+
     if (interval_bytes > 0 && printed < dur)
         print_interval(last, now_sec(), start, interval_bytes);
 
-    return total_bytes;
+    return (result_t){ total_bytes, elapsed };
 }
 
-static long long do_send(int fd, char *buf, unsigned dur)
+static result_t do_send(int fd, char *buf, unsigned dur)
 {
     long long total_bytes    = 0;
     long long interval_bytes = 0;
@@ -92,9 +110,10 @@ static long long do_send(int fd, char *buf, unsigned dur)
 
         if (n <= 0)
         {
+            double elapsed = now_sec() - start;
             if (printed < dur)
                 print_interval(last, now_sec(), start, interval_bytes);
-            return total_bytes;
+            return (result_t){ total_bytes, elapsed };
         }
 
         total_bytes    += n;
@@ -111,10 +130,12 @@ static long long do_send(int fd, char *buf, unsigned dur)
         }
     }
 
+    double elapsed = now_sec() - start;
+
     if (printed < dur)
         print_interval(last, now_sec(), start, interval_bytes);
 
-    return total_bytes;
+    return (result_t){ total_bytes, elapsed };
 }
 
 int main(int argc, char *argv[])
@@ -195,37 +216,42 @@ int main(int argc, char *argv[])
     const char *mode_names[] = { "", "UPSTREAM", "DOWNSTREAM", "BOTH" };
     printf("Mode        : %s\n",       mode_names[ctrl.mode]);
     printf("Duration    : %u sec\n\n", ctrl.duration);
-    printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
-    printf("------------------------------------------------\n");
+
+    result_t up_res   = { 0, 0.0 };
+    result_t down_res = { 0, 0.0 };
 
     memset(buffer, 'A', BUF_SIZE);
 
     /*
      * UPSTREAM
      */
-    if (ctrl.mode == MODE_UP)
+    if (ctrl.mode == MODE_UP || ctrl.mode == MODE_BOTH)
     {
-        do_recv(client_fd, buffer, ctrl.duration);
+        if (ctrl.mode == MODE_BOTH)
+            printf("UPSTREAM phase\n");
+
+        printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
+        printf("------------------------------------------------\n");
+
+        up_res = do_recv(client_fd, buffer, ctrl.duration);
+
+        print_result("UPSTREAM", "Recv", up_res.bytes, up_res.elapsed);
     }
 
     /*
      * DOWNSTREAM
      */
-    else if (ctrl.mode == MODE_DOWN)
+    if (ctrl.mode == MODE_DOWN || ctrl.mode == MODE_BOTH)
     {
-        do_send(client_fd, buffer, ctrl.duration);
-    }
+        if (ctrl.mode == MODE_BOTH)
+            printf("\nDOWNSTREAM phase\n");
 
-    /*
-     * BOTH
-     */
-    else if (ctrl.mode == MODE_BOTH)
-    {
-        printf("UPSTREAM phase\n");
-        do_recv(client_fd, buffer, ctrl.duration);
+        printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
+        printf("------------------------------------------------\n");
 
-        printf("\nDOWNSTREAM phase\n");
-        do_send(client_fd, buffer, ctrl.duration);
+        down_res = do_send(client_fd, buffer, ctrl.duration);
+        shutdown(client_fd, SHUT_WR);
+        print_result("DOWNSTREAM", "Sent", down_res.bytes, down_res.elapsed);
     }
 
     close(client_fd);

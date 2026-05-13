@@ -21,6 +21,12 @@ typedef struct
     uint32_t duration;
 } control_t;
 
+typedef struct
+{
+    long long bytes;
+    double    elapsed;
+} result_t;
+
 static double now_sec()
 {
     struct timeval tv;
@@ -28,13 +34,22 @@ static double now_sec()
     return tv.tv_sec + tv.tv_usec / 1e6;
 }
 
+static void print_interval(double last, double now,
+                            double start, long long bytes)
+{
+    double bandwidth = (bytes / 1024.0 / 1024.0) / (now - last);
+    printf("[%6.2f - %6.2f]   %10.2f\n",
+           last - start, now - start, bandwidth);
+}
+
 static void print_result(const char *label, const char *dir,
-                         long long bytes, int dur)
+                         long long bytes, double elapsed)
 {
     printf("\n===== %s RESULT =====\n", label);
     printf("Bytes %-5s : %lld\n",    dir, bytes);
     printf("MB    %-5s : %.2f MB\n", dir, bytes / 1024.0 / 1024.0);
-    printf("Avg MB/s    : %.2f\n",  (bytes / 1024.0 / 1024.0) / dur);
+    printf("Elapsed     : %.2f sec\n", elapsed);
+    printf("Avg MB/s    : %.2f\n",  (bytes / 1024.0 / 1024.0) / elapsed);
 }
 
 void usage(const char *prog)
@@ -47,6 +62,81 @@ void usage(const char *prog)
     printf("  -t <seconds>     Test duration in seconds (default: 5)\n");
     printf("  -m <mode>        up | down | both (default: up)\n");
     printf("  -h, --help       Show this help message\n\n");
+}
+
+static result_t do_send(int fd, char *buf, int duration)
+{
+    long long total_bytes    = 0;
+    long long interval_bytes = 0;
+    unsigned  printed        = 0;
+    double    start          = now_sec();
+    double    last           = start;
+    ssize_t   n;
+
+    printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
+    printf("------------------------------------------------\n");
+
+    while (now_sec() - start < duration)
+    {
+        n = write(fd, buf, BUF_SIZE);
+        if (n <= 0) { perror("write"); break; }
+
+        total_bytes    += n;
+        interval_bytes += n;
+
+        double now = now_sec();
+
+        if (now - last >= 1.0 && printed < (unsigned)duration)
+        {
+            print_interval(last, now, start, interval_bytes);
+            printed++;
+            interval_bytes = 0;
+            last = now;
+        }
+    }
+
+    double elapsed = now_sec() - start;
+
+    if (interval_bytes > 0 && printed < (unsigned)duration)
+        print_interval(last, now_sec(), start, interval_bytes);
+
+    return (result_t){ total_bytes, elapsed };
+}
+
+static result_t do_recv(int fd, char *buf, int duration)
+{
+    long long total_bytes    = 0;
+    long long interval_bytes = 0;
+    unsigned  printed        = 0;
+    double    start          = now_sec();
+    double    last           = start;
+    ssize_t   n;
+
+    printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
+    printf("------------------------------------------------\n");
+
+    while ((n = read(fd, buf, BUF_SIZE)) > 0)
+    {
+        total_bytes    += n;
+        interval_bytes += n;
+
+        double now = now_sec();
+
+        if (now - last >= 1.0 && printed < (unsigned)duration)
+        {
+            print_interval(last, now, start, interval_bytes);
+            printed++;
+            interval_bytes = 0;
+            last = now;
+        }
+    }
+
+    double elapsed = now_sec() - start;
+
+    if (interval_bytes > 0 && printed < (unsigned)duration)
+        print_interval(last, now_sec(), start, interval_bytes);
+
+    return (result_t){ total_bytes, elapsed };
 }
 
 int main(int argc, char *argv[])
@@ -125,16 +215,14 @@ int main(int argc, char *argv[])
      * Send handshake
      */
     control_t ctrl;
-    ctrl.key    = HANDSHAKE_KEY;
+    ctrl.key      = HANDSHAKE_KEY;
     ctrl.mode     = mode;
     ctrl.duration = duration;
     write(sock, &ctrl, sizeof(ctrl));
 
-    char      buffer[BUF_SIZE];
-    long long up_bytes   = 0;
-    long long down_bytes = 0;
-    double    start;
-    ssize_t   n;
+    char     buffer[BUF_SIZE];
+    result_t up_res   = { 0, 0.0 };
+    result_t down_res = { 0, 0.0 };
 
     memset(buffer, 'A', BUF_SIZE);
 
@@ -144,17 +232,8 @@ int main(int argc, char *argv[])
     if (mode == MODE_UP || mode == MODE_BOTH)
     {
         printf(mode == MODE_UP ? "Mode: UPSTREAM\n" : "Mode: BOTH\nUPSTREAM phase\n");
-
-        start = now_sec();
-        while (now_sec() - start < duration)
-        {
-            n = write(sock, buffer, BUF_SIZE);
-            if (n <= 0) { perror("write"); break; }
-            up_bytes += n;
-        }
-
-        if (mode == MODE_BOTH)
-            shutdown(sock, SHUT_WR);
+        up_res = do_send(sock, buffer, duration);
+        shutdown(sock, SHUT_WR);
     }
 
     /*
@@ -163,16 +242,7 @@ int main(int argc, char *argv[])
     if (mode == MODE_DOWN || mode == MODE_BOTH)
     {
         printf(mode == MODE_DOWN ? "Mode: DOWNSTREAM\n" : "DOWNSTREAM phase\n");
-
-        start = now_sec();
-        while (now_sec() - start < duration)
-        {
-            n = read(sock, buffer, BUF_SIZE);
-            if (n <= 0) { perror("read"); break; }
-            down_bytes += n;
-        }
-
-        sleep(1);
+        down_res = do_recv(sock, buffer, duration);
     }
 
     /*
@@ -184,22 +254,24 @@ int main(int argc, char *argv[])
 
     if (mode == MODE_UP)
     {
-        print_result("UPSTREAM", "Sent", up_bytes, duration);
+        print_result("UPSTREAM", "Sent", up_res.bytes, up_res.elapsed);
     }
     else if (mode == MODE_DOWN)
     {
-        print_result("DOWNSTREAM", "Recv", down_bytes, duration);
+        print_result("DOWNSTREAM", "Recv", down_res.bytes, down_res.elapsed);
     }
     else if (mode == MODE_BOTH)
     {
-        print_result("UPSTREAM",   "Sent", up_bytes,   duration);
-        print_result("DOWNSTREAM", "Recv", down_bytes, duration);
+        print_result("UPSTREAM",   "Sent", up_res.bytes,   up_res.elapsed);
+        print_result("DOWNSTREAM", "Recv", down_res.bytes, down_res.elapsed);
 
-        long long total = up_bytes + down_bytes;
+        long long total   = up_res.bytes + down_res.bytes;
+        double    elapsed = up_res.elapsed + down_res.elapsed;
         printf("\n===== TOTAL =====\n");
         printf("Bytes Total : %lld\n",    total);
         printf("MB Total    : %.2f MB\n", total / 1024.0 / 1024.0);
-        printf("Avg MB/s    : %.2f\n",   (total / 1024.0 / 1024.0) / (duration * 2));
+        printf("Elapsed     : %.2f sec\n", elapsed);
+        printf("Avg MB/s    : %.2f\n",   (total / 1024.0 / 1024.0) / elapsed);
     }
 
     close(sock);
