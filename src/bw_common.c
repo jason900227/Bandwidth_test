@@ -30,33 +30,37 @@ void print_result(const char *label, const char *dir,
 
 result_t do_send(int fd, char *buf, unsigned dur)
 {
+    /* Init counters and timer */
     long long total_bytes    = 0;
     long long interval_bytes = 0;
     unsigned  printed        = 0;
     double    start          = now_sec();
     double    last           = start;
+    double    now            = start;
     ssize_t   n;
 
     printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
     printf("------------------------------------------------\n");
 
-    while (now_sec() - start < dur)
+    /* Send loop */
+    while (now - start < dur)
     {
         n = write(fd, buf, BUF_SIZE);
 
+        /* Write error or peer closed */
         if (n <= 0)
         {
-            double elapsed = now_sec() - start;
-            if (printed < dur)
-                print_interval(last, now_sec(), start, interval_bytes);
-            return (result_t){ total_bytes, elapsed };
+            if (interval_bytes > 0 && printed < dur)
+                print_interval(last, now, start, interval_bytes);
+            return (result_t){ total_bytes, now - start };
         }
 
         total_bytes    += n;
         interval_bytes += n;
 
-        double now = now_sec();
+        now = now_sec();
 
+        /* Print per-second interval */
         if (now - last >= 1.0 && printed < dur)
         {
             print_interval(last, now, start, interval_bytes);
@@ -66,33 +70,36 @@ result_t do_send(int fd, char *buf, unsigned dur)
         }
     }
 
-    double elapsed = now_sec() - start;
+    /* Print remaining interval */
+    if (interval_bytes > 0 && printed < dur)
+        print_interval(last, now, start, interval_bytes);
 
-    if (printed < dur)
-        print_interval(last, now_sec(), start, interval_bytes);
-
-    return (result_t){ total_bytes, elapsed };
+    return (result_t){ total_bytes, now - start };
 }
 
 result_t do_recv(int fd, char *buf, unsigned dur)
 {
+    /* Init counters and timer */
     long long total_bytes    = 0;
     long long interval_bytes = 0;
     unsigned  printed        = 0;
     double    start          = now_sec();
     double    last           = start;
+    double    now            = start;
     ssize_t   n;
 
     printf("%-18s %-18s\n", "Interval(sec)", "Bandwidth(MB/s)");
     printf("------------------------------------------------\n");
 
+    /* Recv loop */
     while ((n = read(fd, buf, BUF_SIZE)) > 0)
     {
         total_bytes    += n;
         interval_bytes += n;
 
-        double now = now_sec();
+        now = now_sec();
 
+        /* Print per-second interval */
         if (now - last >= 1.0 && printed < dur)
         {
             print_interval(last, now, start, interval_bytes);
@@ -102,10 +109,9 @@ result_t do_recv(int fd, char *buf, unsigned dur)
         }
     }
 
-    double elapsed = now_sec() - start;
-
+    /* Print remaining interval */
     if (interval_bytes > 0 && printed < dur)
-        print_interval(last, now_sec(), start, interval_bytes);
+        print_interval(last, now, start, interval_bytes);
 
-    return (result_t){ total_bytes, elapsed };
+    return (result_t){ total_bytes, now - start };
 }

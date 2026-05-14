@@ -25,6 +25,7 @@ int main(int argc, char *argv[])
     int  duration = 5;
     int  mode     = MODE_UP;
 
+    /* Parse arguments */
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc)
@@ -61,11 +62,14 @@ int main(int argc, char *argv[])
         }
     }
 
+    /* Validate arguments */
     if (!ip || duration <= 0) { usage(argv[0]); return -1; }
 
+    /* Create socket */
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) { perror("socket"); return -1; }
 
+    /* Build server address */
     struct sockaddr_in server;
     memset(&server, 0, sizeof(server));
     server.sin_family = AF_INET;
@@ -78,6 +82,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /* Connect to server */
     printf("Connecting to %s:%d...\n", ip, port);
 
     if (connect(sock, (struct sockaddr*)&server, sizeof(server)) < 0)
@@ -89,24 +94,21 @@ int main(int argc, char *argv[])
 
     printf("Connected\n");
 
-    /*
-     * Send handshake
-     */
+    /* Send handshake */
     control_t ctrl;
     ctrl.key      = HANDSHAKE_KEY;
     ctrl.mode     = mode;
     ctrl.duration = duration;
     write(sock, &ctrl, sizeof(ctrl));
 
+    /* Prepare buffer */
     char     buffer[BUF_SIZE];
     result_t up_res   = { 0, 0.0 };
     result_t down_res = { 0, 0.0 };
 
     memset(buffer, 'A', BUF_SIZE);
 
-    /*
-     * UPSTREAM
-     */
+    /* Upstream test */
     if (mode == MODE_UP || mode == MODE_BOTH)
     {
         printf(mode == MODE_UP ? "Mode: UPSTREAM\n" : "Mode: BOTH\nUPSTREAM phase\n");
@@ -114,18 +116,14 @@ int main(int argc, char *argv[])
         shutdown(sock, SHUT_WR);
     }
 
-    /*
-     * DOWNSTREAM
-     */
+    /* Downstream test */
     if (mode == MODE_DOWN || mode == MODE_BOTH)
     {
         printf(mode == MODE_DOWN ? "Mode: DOWNSTREAM\n" : "DOWNSTREAM phase\n");
         down_res = do_recv(sock, buffer, duration);
     }
 
-    /*
-     * RESULT
-     */
+    /* Print results */
     printf("\nServer IP   : %s\n", ip);
     printf("Port        : %d\n",   port);
     printf("Duration    : %d sec\n", duration);
@@ -152,6 +150,7 @@ int main(int argc, char *argv[])
         printf("Avg MB/s    : %.2f\n",   (total / 1024.0 / 1024.0) / elapsed);
     }
 
+    /* Cleanup */
     close(sock);
     return 0;
 }

@@ -21,6 +21,7 @@ int main(int argc, char *argv[])
     int client_fd;
     int port = DEFAULT_PORT;
 
+    /* Parse arguments */
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-p") == 0 && i + 1 < argc)
@@ -44,17 +45,21 @@ int main(int argc, char *argv[])
     struct sockaddr_in addr;
     char buffer[BUF_SIZE];
 
+    /* Create socket */
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) { perror("socket"); return -1; }
 
+    /* Allow port reuse after restart */
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
+    /* Build server address */
     memset(&addr, 0, sizeof(addr));
     addr.sin_family      = AF_INET;
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port        = htons(port);
 
+    /* Bind and listen */
     if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
         perror("bind");
@@ -65,6 +70,7 @@ int main(int argc, char *argv[])
     listen(server_fd, 1);
     printf("Server listening on %d...\n", port);
 
+    /* Accept client connection */
     client_fd = accept(server_fd, NULL, NULL);
     if (client_fd < 0)
     {
@@ -75,9 +81,7 @@ int main(int argc, char *argv[])
 
     printf("Client connected\n");
 
-    /*
-     * Receive handshake
-     */
+    /* Receive handshake */
     control_t ctrl;
     memset(&ctrl, 0, sizeof(ctrl));
     read(client_fd, &ctrl, sizeof(ctrl));
@@ -90,40 +94,59 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    /* Print test parameters */
     const char *mode_names[] = { "", "UPSTREAM", "DOWNSTREAM", "BOTH" };
     printf("Mode        : %s\n",       mode_names[ctrl.mode]);
     printf("Duration    : %u sec\n\n", ctrl.duration);
 
+    /* Prepare buffer */
     result_t up_res   = { 0, 0.0 };
     result_t down_res = { 0, 0.0 };
 
     memset(buffer, 'A', BUF_SIZE);
 
-    /*
-     * UPSTREAM
-     */
+    /* Upstream test */
     if (ctrl.mode == MODE_UP || ctrl.mode == MODE_BOTH)
     {
-        if (ctrl.mode == MODE_BOTH)
-            printf("UPSTREAM phase\n");
-
+        printf(ctrl.mode == MODE_UP ? "Mode: UPSTREAM\n" : "Mode: BOTH\nUPSTREAM phase\n");
         up_res = do_recv(client_fd, buffer, ctrl.duration);
-        print_result("UPSTREAM", "Recv", up_res.bytes, up_res.elapsed);
     }
 
-    /*
-     * DOWNSTREAM
-     */
+    /* Downstream test */
     if (ctrl.mode == MODE_DOWN || ctrl.mode == MODE_BOTH)
     {
-        if (ctrl.mode == MODE_BOTH)
-            printf("\nDOWNSTREAM phase\n");
-
+        printf(ctrl.mode == MODE_DOWN ? "Mode: DOWNSTREAM\n" : "DOWNSTREAM phase\n");
         down_res = do_send(client_fd, buffer, ctrl.duration);
         shutdown(client_fd, SHUT_WR);
-        print_result("DOWNSTREAM", "Sent", down_res.bytes, down_res.elapsed);
     }
 
+    /* Print results */
+    printf("\nPort        : %d\n",    port);
+    printf("Duration    : %u sec\n", ctrl.duration);
+
+    if (ctrl.mode == MODE_UP)
+    {
+        print_result("UPSTREAM", "Recv", up_res.bytes, up_res.elapsed);
+    }
+    else if (ctrl.mode == MODE_DOWN)
+    {
+        print_result("DOWNSTREAM", "Sent", down_res.bytes, down_res.elapsed);
+    }
+    else if (ctrl.mode == MODE_BOTH)
+    {
+        print_result("UPSTREAM",   "Recv", up_res.bytes,   up_res.elapsed);
+        print_result("DOWNSTREAM", "Sent", down_res.bytes, down_res.elapsed);
+
+        long long total   = up_res.bytes + down_res.bytes;
+        double    elapsed = up_res.elapsed + down_res.elapsed;
+        printf("\n===== TOTAL =====\n");
+        printf("Bytes Total : %lld\n",    total);
+        printf("MB Total    : %.2f MB\n", total / 1024.0 / 1024.0);
+        printf("Elapsed     : %.2f sec\n", elapsed);
+        printf("Avg MB/s    : %.2f\n",   (total / 1024.0 / 1024.0) / elapsed);
+    }
+
+    /* Cleanup */
     close(client_fd);
     close(server_fd);
     return 0;
